@@ -50,4 +50,4 @@ function markAnswered(id) {
   stmt.run(id);
 }
 
-module.exports = { logMessage, markAnswered };
+module.exports = { db, logMessage, markAnswered };

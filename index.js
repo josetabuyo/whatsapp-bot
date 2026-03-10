@@ -1,8 +1,21 @@
 require('dotenv').config();
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const { execSync } = require('child_process');
+const express = require('express');
 const fs = require('fs');
 const path = require('path');
+
+const { logMessage, markAnswered } = require('./db');
+const createApi = require('./api');
+
+// Timestamps en todos los logs
+const _log = console.log.bind(console);
+const _warn = console.warn.bind(console);
+const _error = console.error.bind(console);
+const ts = () => new Date().toLocaleString('es-AR', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+console.log   = (...a) => _log(`[${ts()}]`, ...a);
+console.warn  = (...a) => _warn(`[${ts()}]`, ...a);
+console.error = (...a) => _error(`[${ts()}]`, ...a);
 
 // Limpiar procesos Chrome colgados de corridas anteriores
 try {
@@ -10,10 +23,9 @@ try {
   execSync('sleep 1');
 } catch {}
 
-const { logMessage, markAnswered } = require('./db');
-
-// --- Carga y validación de phones.json ---
 const CONFIG_PATH = path.join(__dirname, 'phones.json');
+const PORT = process.env.PORT || 3000;
+const CHROME_PATH = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
 if (!fs.existsSync(CONFIG_PATH)) {
   console.error('ERROR: No existe phones.json. Copia phones.example.json y complétalo.');
@@ -33,14 +45,12 @@ if (!config.bots || !Array.isArray(config.bots) || config.bots.length === 0) {
   process.exit(1);
 }
 
-// --- Verifica si una sesión está realmente autenticada (tiene datos .ldb de WhatsApp) ---
-function hasValidSession(sessionId) {
-  const ldbPath = path.join(__dirname, '.wwebjs_auth', `session-${sessionId}`, 'Default', 'Local Storage', 'leveldb');
-  if (!fs.existsSync(ldbPath)) return false;
-  return fs.readdirSync(ldbPath).some(f => f.endsWith('.ldb'));
-}
+// --- Estado compartido de clientes ---
+// sessionId -> { client, status, qr, botId, number, readyTime }
+// status: 'connecting' | 'qr_ready' | 'authenticated' | 'ready' | 'disconnected' | 'failed'
+const clients = {};
 
-// --- Config en vivo: sessionId -> { allowedContacts, replyMessage } ---
+// --- Config en vivo ---
 const liveConfig = {};
 
 function reloadLiveConfig(cfg) {
@@ -57,104 +67,103 @@ function reloadLiveConfig(cfg) {
 
 reloadLiveConfig(config);
 
-// Recarga automática al guardar phones.json (sin reiniciar Chrome)
 fs.watch(CONFIG_PATH, (eventType) => {
   if (eventType !== 'change') return;
   try {
     const newConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
     reloadLiveConfig(newConfig);
-    console.log('[config] phones.json recargado. Cambios aplicados al instante.');
+    console.log('[config] phones.json recargado.');
   } catch (err) {
     console.error('[config] Error al recargar phones.json:', err.message);
   }
 });
 
-// --- Construye la lista de clientes a inicializar ---
-const clientsToInit = [];
-
-for (const bot of config.bots) {
-  if (!bot.id || !bot.autoReplyMessage || !Array.isArray(bot.phones)) {
-    console.error(`ERROR: Bot mal configurado:`, JSON.stringify(bot));
-    process.exit(1);
-  }
-
-  for (const phoneConfig of bot.phones) {
-    const { number } = phoneConfig;
-
-    if (!number) {
-      console.error(`ERROR: Un teléfono en el bot "${bot.id}" no tiene "number".`);
-      process.exit(1);
-    }
-
-    const sessionId = `${bot.id}-${number}`;
-    if (!hasValidSession(sessionId)) {
-      console.log(`[${bot.id}/${number}] Sin sesión. Usá 'npm run connect ${number}' para vincular.`);
-      continue;
-    }
-
-    clientsToInit.push({ botId: bot.id, number, sessionId });
-  }
+// --- Verifica sesión guardada ---
+function hasValidSession(sessionId) {
+  const ldbPath = path.join(__dirname, '.wwebjs_auth', `session-${sessionId}`, 'Default', 'Local Storage', 'leveldb');
+  if (!fs.existsSync(ldbPath)) return false;
+  return fs.readdirSync(ldbPath).some(f => f.endsWith('.ldb'));
 }
 
-// Inicializa los clientes de forma secuencial para evitar que Chrome colisione al arrancar
-(async () => {
-  for (let i = 0; i < clientsToInit.length; i++) {
-    createPhoneClient(clientsToInit[i]);
-    if (i < clientsToInit.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 8000));
-    }
-  }
-})();
-
-function createPhoneClient({ botId, number, sessionId }) {
-  let botReadyTime = null;
+// --- Crea y gestiona un cliente WA ---
+// autoStart=true → arrancado al inicio (sesión guardada). Si pide QR, la sesión expiró → destruir silenciosamente.
+// autoStart=false → iniciado desde la UI por el usuario → mostrar QR.
+function createPhoneClient({ botId, number, sessionId, autoStart = false }) {
   const label = `[${botId}/${number}]`;
+
+  clients[sessionId] = { status: 'connecting', qr: null, botId, number, client: null, readyTime: null };
 
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: sessionId }),
     puppeteer: {
       headless: true,
-      executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      executablePath: CHROME_PATH,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
     },
   });
 
+  clients[sessionId].client = client;
+
+  client.on('qr', (qr) => {
+    if (autoStart) {
+      // Sesión local expirada en WhatsApp — no mostrar QR, esperar acción del usuario
+      console.log(`${label} Sesión expirada. Reconectá desde http://localhost:${PORT}`);
+      clients[sessionId].status = 'stopped';
+      clients[sessionId].qr = null;
+      clients[sessionId]._intentionalStop = true;
+      try { client.destroy(); } catch {}
+      const sessionPath = path.join(__dirname, '.wwebjs_auth', `session-${sessionId}`);
+      try { fs.rmSync(sessionPath, { recursive: true }); } catch {}
+      return;
+    }
+    // Conexión iniciada desde la UI → mostrar QR
+    console.log(`${label} QR generado.`);
+    clients[sessionId].qr = qr;
+    clients[sessionId].status = 'qr_ready';
+  });
+
+  client.on('authenticated', () => {
+    console.log(`${label} Autenticado. Sesión guardada.`);
+    clients[sessionId].status = 'authenticated';
+    clients[sessionId].qr = null;
+  });
+
   client.on('ready', () => {
-    botReadyTime = Date.now();
+    const readyTime = Date.now();
+    clients[sessionId].status = 'ready';
+    clients[sessionId].readyTime = readyTime;
+    clients[sessionId].qr = null;
     const { allowedContacts } = liveConfig[sessionId] || {};
-    const contactsInfo = allowedContacts && allowedContacts.length > 0
-      ? allowedContacts.join(', ')
-      : '(ninguno configurado)';
-    console.log(`${label} Bot listo. Contactos permitidos: ${contactsInfo}`);
+    const contactsInfo = allowedContacts?.length > 0 ? allowedContacts.join(', ') : '(ninguno configurado)';
+    console.log(`${label} Bot listo. Contactos: ${contactsInfo}`);
   });
 
   client.on('auth_failure', (msg) => {
-    console.error(`${label} Error de autenticación: ${msg}. Sesión inválida, eliminando...`);
+    console.error(`${label} Error de autenticación: ${msg}. Eliminando sesión...`);
+    clients[sessionId].status = 'failed';
+    clients[sessionId].qr = null;
     const sessionPath = path.join(__dirname, '.wwebjs_auth', `session-${sessionId}`);
     try { fs.rmSync(sessionPath, { recursive: true }); } catch {}
-    console.error(`${label} Usá 'npm run connect ${number}' para reconectar.`);
   });
 
   client.on('disconnected', (reason) => {
-    console.warn(`${label} Cliente desconectado: ${reason}`);
+    console.warn(`${label} Desconectado: ${reason}`);
+    clients[sessionId].status = 'disconnected';
+    clients[sessionId].qr = null;
     if (['LOGOUT', 'UNPAIRED', 'UNPAIRED_IDLE'].includes(reason)) {
       const sessionPath = path.join(__dirname, '.wwebjs_auth', `session-${sessionId}`);
-      try {
-        fs.rmSync(sessionPath, { recursive: true });
-        console.log(`${label} Sesión eliminada. Usá 'npm run connect ${number}' para reconectar.`);
-      } catch {}
+      try { fs.rmSync(sessionPath, { recursive: true }); } catch {}
+      console.log(`${label} Sesión eliminada. Reconectá desde la UI.`);
     }
   });
 
   client.on('message', async (msg) => {
-    // DEBUG: log de todos los mensajes entrantes
-    console.log(`${label} [DEBUG] mensaje recibido — from: ${msg.from}, fromMe: ${msg.fromMe}, timestamp: ${msg.timestamp}, body: "${msg.body}"`);
+    console.log(`${label} [DEBUG] from: ${msg.from}, fromMe: ${msg.fromMe}, body: "${msg.body}"`);
 
-    // Ignorar mensajes propios y de grupos
     if (msg.fromMe || msg.from.endsWith('@g.us')) return;
 
-    // Ignorar mensajes anteriores al inicio del bot
-    if (botReadyTime && msg.timestamp * 1000 < botReadyTime) return;
+    const { readyTime } = clients[sessionId] || {};
+    if (readyTime && msg.timestamp * 1000 < readyTime) return;
 
     let senderPhone = msg.from.replace('@c.us', '').replace('@lid', '');
     let name = null;
@@ -166,13 +175,9 @@ function createPhoneClient({ botId, number, sessionId }) {
     } catch {}
 
     const { allowedContacts, replyMessage } = liveConfig[sessionId] || {};
+    console.log(`${label} [DEBUG] name: "${name}", allowedContacts: ${JSON.stringify(allowedContacts)}`);
 
-    console.log(`${label} [DEBUG] contacto resuelto — phone: ${senderPhone}, name: "${name}", allowedContacts: ${JSON.stringify(allowedContacts)}`);
-
-    // Si no hay contactos configurados, no responder a nadie
     if (!allowedContacts || allowedContacts.length === 0) return;
-
-    // Solo responder a contactos permitidos (por nombre o por número)
     if (!allowedContacts.includes(name) && !allowedContacts.includes(senderPhone)) return;
 
     const msgId = logMessage(botId, number, senderPhone, name, msg.body);
@@ -191,18 +196,63 @@ function createPhoneClient({ botId, number, sessionId }) {
     try {
       await client.initialize();
     } catch (err) {
+      if (clients[sessionId]?._intentionalStop) return;
       try { await client.destroy(); } catch {}
       if (attempt <= 3) {
         console.warn(`${label} Error al inicializar (intento ${attempt}/3): ${err.message}. Reintentando en 4s...`);
         await new Promise(r => setTimeout(r, 4000));
         initWithRetry(attempt + 1);
       } else {
+        clients[sessionId].status = 'failed';
         const sessionPath = path.join(__dirname, '.wwebjs_auth', `session-${sessionId}`);
         try { fs.rmSync(sessionPath, { recursive: true }); } catch {}
-        console.error(`${label} No se pudo inicializar después de 3 intentos. Sesión eliminada. Usá 'npm run connect ${number}' para reconectar.`);
+        console.error(`${label} Falló después de 3 intentos. Reconectá desde la UI.`);
       }
     }
   };
 
   initWithRetry();
 }
+
+// --- Express ---
+const app = express();
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+app.use('/api', createApi({ clients, liveConfig, reloadLiveConfig, createPhoneClient, CONFIG_PATH }));
+
+app.get('/connect', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'connect.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`Servidor corriendo en http://localhost:${PORT}`);
+});
+
+// --- Inicializar clientes con sesión válida al arrancar ---
+const clientsToInit = [];
+
+for (const bot of config.bots) {
+  if (!bot.id || !bot.autoReplyMessage || !Array.isArray(bot.phones)) {
+    console.error(`ERROR: Bot mal configurado:`, JSON.stringify(bot));
+    process.exit(1);
+  }
+  for (const phoneConfig of bot.phones) {
+    const { number } = phoneConfig;
+    if (!number) { console.error(`ERROR: número faltante en bot "${bot.id}".`); process.exit(1); }
+    const sessionId = `${bot.id}-${number}`;
+    if (!hasValidSession(sessionId)) {
+      console.log(`[${bot.id}/${number}] Sin sesión. Vinculá desde http://localhost:${PORT}`);
+      continue;
+    }
+    clientsToInit.push({ botId: bot.id, number, sessionId, autoStart: true });
+  }
+}
+
+(async () => {
+  for (let i = 0; i < clientsToInit.length; i++) {
+    createPhoneClient(clientsToInit[i]);
+    if (i < clientsToInit.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 8000));
+    }
+  }
+})();
