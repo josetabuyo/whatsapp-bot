@@ -23,8 +23,10 @@ backend/.venv/
 __pycache__/
 *.pyc
 
-# Playwright MCP
+# Playwright
 .playwright-mcp/
+frontend/test-results/
+frontend/playwright-report/
 
 # Monitor logs
 monitor/
