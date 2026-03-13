@@ -1,5 +1,11 @@
 # WhatsApp Bot — Contexto del proyecto
 
+## Forma de trabajar
+- Responder siempre en **español**
+- Para mensajes cortos: ejecutar `say -v "Paulina" "..."` para hablar en voz alta
+- Para código, logs o texto largo: solo texto, sin voz
+- Trabajar un problema a la vez
+
 ## Stack
 - Runtime: Node.js
 - WhatsApp: `whatsapp-web.js` (no oficial, vía QR)
