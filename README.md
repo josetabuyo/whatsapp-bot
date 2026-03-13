@@ -94,6 +94,23 @@ En reinicios posteriores, la sesión se restaura automáticamente desde `.wwebjs
 
 ---
 
+## Arrancar el servidor
+
+```bash
+# Arranca el servidor y guarda el output en monitor/monitor.log
+start_server_monitor
+```
+
+En otra terminal, para seguir el log en tiempo real:
+```bash
+check_monitor
+```
+
+> Estos son aliases definidos en `~/.zshrc`. `start_server_monitor` hace `npm start | tee monitor/monitor.log`.
+> Se recomienda siempre usar `start_server_monitor` en lugar de `node index.js` directamente, así el log queda persistido para diagnóstico.
+
+---
+
 ## Ver logs de mensajes
 
 ```bash
