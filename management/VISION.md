@@ -84,12 +84,14 @@ Cada empresa avanza en este camino a su ritmo. La plataforma es la misma para to
 
 | Cosa | Estado |
 |------|--------|
-| Bot WA multi-teléfono | ✅ funcionando |
-| Bot Telegram | ✅ funcionando |
+| Bot Telegram (Python) | ✅ funcionando |
+| Bot WA multi-teléfono (Node.js adaptador) | ⚠️ pendiente migrar a microservicio |
 | DB SQLite con mensajes | ✅ funcionando |
-| API REST básica | ✅ funcionando |
-| Panel admin web | ✅ funcionando (básico) |
-| Watchdog de reconexión | ⚠️ en revisión |
+| API REST (FastAPI) | ✅ funcionando |
+| Panel admin React | ✅ funcionando — login, dashboard, connect QR |
+| Tests de Playwright | ✅ login, proxy, dashboard |
+| Watchdog de reconexión WA | ⚠️ en revisión |
+| Adaptador WA como microservicio | 🔜 Etapa 2 |
 | Clientes por empresa en DB | 🔜 planeado |
 | Conversaciones unificadas por cliente | 🔜 planeado |
 | Respuesta desde el panel | 🔜 planeado |
