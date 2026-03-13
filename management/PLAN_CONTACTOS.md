@@ -1,18 +1,40 @@
-# Plan: Lista de clientes por empresa
+# Plan: Contactos por empresa
 
 ## Objetivo
-Reemplazar el `allowedContacts[]` (array de strings en `phones.json`) por una lista de contactos real en la base de datos, con nombre + canales (WA, Telegram, email futuro).
+
+Reemplazar el `allowedContacts[]` (array de strings en `phones.json`) por una lista de contactos real en la base de datos, con nombre + canales (WA, Telegram, email futuro), y unificar las conversaciones por contacto sin importar desde qué canal llegaron.
 
 ## Por qué
-- Hoy los contactos son strings sueltos (nombre o número) en el JSON — frágil y sin estructura
+
+- Hoy los contactos son strings sueltos en el JSON — frágil y sin estructura
 - No hay forma de ver con quién habló cada empresa
 - Si el mismo contacto escribe por WA y por Telegram, son registros separados sin relación
 
 ---
 
-## Fase 1 — Modelo de datos (DB)
+## Modelo de datos
 
-### Tablas nuevas en SQLite
+```
+Contacto
+  ├── id
+  ├── empresa_id (bot_id)
+  ├── nombre
+  └── canales[]
+        ├── type: "whatsapp" | "telegram" | "email"
+        └── value: número / username / email
+
+Conversación
+  ├── id
+  ├── empresa_id
+  ├── contacto_id
+  └── mensajes[]
+        ├── channel
+        ├── direction: "in" | "out"
+        ├── body
+        └── timestamp
+```
+
+### Tablas SQLite
 
 ```sql
 CREATE TABLE contacts (
@@ -31,15 +53,19 @@ CREATE TABLE contact_channels (
 );
 ```
 
-### Cambios en `db.js`
-- Agregar `createContact(botId, name)`
-- Agregar `addChannel(contactId, type, value)`
-- Agregar `getContactsForBot(botId)`
-- Agregar `findContactByChannel(type, value)` → usado al recibir mensajes
-
 ---
 
-## Fase 2 — API REST
+## Fases de implementación
+
+### Fase 1 — Modelo de datos (DB)
+
+Cambios en `db.js`:
+- `createContact(botId, name)`
+- `addChannel(contactId, type, value)`
+- `getContactsForBot(botId)`
+- `findContactByChannel(type, value)` → usado al recibir mensajes
+
+### Fase 2 — API REST
 
 Endpoints nuevos en `api.js`:
 
@@ -52,23 +78,19 @@ POST   /api/contacts/:id/channels         → agregar canal a contacto
 DELETE /api/contact-channels/:id          → quitar canal
 ```
 
----
+### Fase 3 — UI Admin
 
-## Fase 3 — UI Admin
-
-### Sección nueva por empresa: "Contactos"
+Sección nueva por empresa: **Contactos**
 - Lista de contactos con sus canales (WA / TG)
 - Botón "+ Agregar contacto" → modal con nombre + canales
 - Editar / eliminar contacto
 - **Contactos sugeridos**: números que escribieron pero no están en la lista → aparecen como sugerencia con botón "Agregar"
 
-### Vinculación con bots
+Vinculación con bots:
 - Al editar un teléfono/bot, en "Contactos permitidos" se muestra la lista de contactos de la empresa
-- Click para agregar/quitar (reemplaza el input de texto actual)
+- Doble clic para agregar/quitar (reemplaza el input de texto actual)
 
----
-
-## Fase 4 — Lógica del bot
+### Fase 4 — Lógica del bot
 
 En `index.js`, al recibir un mensaje:
 - Buscar `findContactByChannel('whatsapp', senderPhone)`
@@ -77,26 +99,26 @@ En `index.js`, al recibir un mensaje:
 
 Elimina la dependencia de `allowedContacts` en `phones.json`.
 
----
-
-## Fase 5 — Conversaciones unificadas (post-MVP)
+### Fase 5 — Conversaciones unificadas (post-MVP)
 
 - Vista de conversaciones por empresa
 - Un hilo = empresa + contacto (sin importar canal)
+- Si el mismo contacto escribe por WA y por Telegram, se ve como una sola conversación
 - Extiende o reemplaza la tabla `messages` actual
 
 ---
 
-## Orden de implementación sugerido
+## Orden de implementación
 
-1. **Fase 1** — Tablas en DB + funciones en `db.js` (30 min)
-2. **Fase 2** — API REST (45 min)
-3. **Fase 3** — UI básica sin sugeridos (1h)
-4. **Fase 4** — Lógica del bot (30 min)
-5. **Fase 5** — Sugeridos + conversaciones (sesión aparte)
+1. Fase 1 — DB + `db.js`
+2. Fase 2 — API REST
+3. Fase 3 — UI básica (sin sugeridos)
+4. Fase 4 — Lógica del bot
+5. Fase 5 — Sugeridos + conversaciones unificadas (sesión aparte)
 
 ---
 
 ## Dependencias
+
 - Resolver estabilidad del watchdog primero (`ESTADO_WATCHDOG.md`)
-- No romper la compatibilidad con `phones.json` hasta que la UI de contactos esté operativa
+- No romper compatibilidad con `phones.json` hasta que la UI de contactos esté operativa
