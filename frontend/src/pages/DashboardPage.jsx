@@ -7,6 +7,7 @@ const STATUS_LABELS = {
   ready: 'Conectado', qr_ready: 'Esperando escaneo',
   connecting: 'Conectando', authenticated: 'Autenticando',
   disconnected: 'Desconectado', failed: 'Error', stopped: 'Sin iniciar',
+  qr_needed: 'Sin iniciar',
 }
 
 // ─── Modales inline ────────────────────────────────────────────────────────────
@@ -342,7 +343,7 @@ function QRModal({ open, number, onClose, pwd, onConnected }) {
 // ─── Filas de teléfono / telegram ─────────────────────────────────────────────
 
 function PhoneRow({ phone, botId, simMode, pwd, onConnect, onDisconnect, onEdit, onDelete, onMove, onScreenshot, onDragStart }) {
-  const needsQR = ['stopped', 'failed', 'disconnected', undefined, null].includes(phone.status)
+  const needsQR = ['stopped', 'failed', 'disconnected', 'qr_needed', undefined, null].includes(phone.status)
   const isReady = phone.status === 'ready'
   const contactsText = phone.allowedContacts?.length ? phone.allowedContacts.join(', ') : '(sin contactos permitidos)'
 

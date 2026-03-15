@@ -199,6 +199,7 @@ main { max-width: 900px; margin: 28px auto; padding: 0 16px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; }
 .s-ready     { background: #e8f8f0; color: #1a7a45; } .s-ready .dot     { background: #25d366; }
 .s-qr_ready  { background: #fff8e1; color: #856404; } .s-qr_ready .dot  { background: #ffc107; animation: blink 1.2s infinite; }
+.s-qr_needed { background: #fce8e6; color: #a33; } .s-qr_needed .dot { background: #d93025; }
 .s-connecting  { background: #e8f0fe; color: #1a4dab; } .s-connecting .dot  { background: #4285f4; animation: blink 1.2s infinite; }
 .s-authenticated { background: #e8f0fe; color: #1a4dab; } .s-authenticated .dot { background: #4285f4; animation: blink 1.2s infinite; }
 .s-disconnected { background: #fce8e6; color: #a33; } .s-disconnected .dot { background: #d93025; }
