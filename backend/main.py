@@ -34,6 +34,12 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("DB lista.")
 
+    # Limpiar procesos Playwright huérfanos de reinicios anteriores
+    import subprocess, sys
+    subprocess.run(
+        ["pkill", "-f", "ms-playwright/chromium"],
+        capture_output=True,
+    )
     await wa_session.launch()
     logger.info("Browser iniciado.")
 

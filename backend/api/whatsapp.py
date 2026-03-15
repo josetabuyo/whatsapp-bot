@@ -62,6 +62,30 @@ async def get_status(session_id: str):
     return {"status": state["status"], "alive": alive}
 
 
+@router.post("/disconnect/{session_id}", dependencies=[Depends(require_admin)])
+async def disconnect_session(session_id: str):
+    """Cierra el contexto Chromium de una sesión WA limpiamente (sin kill)."""
+    await wa_session.close_session(session_id)
+    if session_id in clients:
+        clients[session_id]["status"] = "disconnected"
+        clients[session_id]["qr"] = None
+    return {"ok": True, "session_id": session_id}
+
+
+@router.post("/disconnect-all", dependencies=[Depends(require_admin)])
+async def disconnect_all():
+    """Cierra todos los contextos Chromium de la app sin tocar el browser del MCP."""
+    closed = []
+    for session_id, state in list(clients.items()):
+        if state.get("type") != "whatsapp":
+            continue
+        await wa_session.close_session(session_id)
+        clients[session_id]["status"] = "disconnected"
+        clients[session_id]["qr"] = None
+        closed.append(session_id)
+    return {"ok": True, "closed": closed}
+
+
 @router.post("/refresh", dependencies=[Depends(require_admin)])
 async def refresh():
     reconnected = 0
@@ -80,10 +104,38 @@ async def refresh():
 # Tarea background: conectar y capturar QR si hace falta
 # ------------------------------------------------------------------
 
+def _get_wa_config(config: dict, number: str) -> dict:
+    """Extrae allowedContacts y autoReplyMessage para un número dado."""
+    for bot in config.get("bots", []):
+        for phone_cfg in bot.get("phones", []):
+            if phone_cfg.get("number") == number:
+                return {
+                    "bot_id": bot["id"],
+                    "allowed_contacts": phone_cfg.get("allowedContacts", []),
+                    "auto_reply": phone_cfg.get("autoReplyMessage") or bot.get("autoReplyMessage", ""),
+                }
+    return {"bot_id": "", "allowed_contacts": [], "auto_reply": ""}
+
+
 async def _connect_and_get_qr(session_id: str, bot_id: str) -> None:
     result = await wa_session.connect(session_id, bot_id)
+
+    if result == "restored":
+        # Sesión restaurada — arrancar listener directamente
+        cfg = _get_wa_config(load_config(), session_id)
+        await wa_session.start_listening(
+            session_id, cfg["bot_id"], session_id,
+            cfg["allowed_contacts"], cfg["auto_reply"],
+        )
+        return
+
     if result == "qr_needed":
         qr = await wa_session.get_qr(session_id)
         if qr:
-            # Esperar en background que el usuario escanee
-            await wa_session.wait_for_auth(session_id)
+            authenticated = await wa_session.wait_for_auth(session_id)
+            if authenticated:
+                cfg = _get_wa_config(load_config(), session_id)
+                await wa_session.start_listening(
+                    session_id, cfg["bot_id"], session_id,
+                    cfg["allowed_contacts"], cfg["auto_reply"],
+                )

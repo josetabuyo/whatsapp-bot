@@ -52,6 +52,16 @@ class BrowserAutomation:
         self._browser = await self._pw.chromium.launch(headless=self.headless)
         logger.info(f"Browser iniciado (headless={self.headless})")
 
+    async def ensure_launched(self) -> None:
+        """Verifica que el browser esté vivo; si se cayó, lo relanza."""
+        try:
+            if self._browser and self._browser.is_connected():
+                return
+        except Exception:
+            pass
+        logger.warning("Browser no disponible, relanzando...")
+        await self.launch()
+
     async def shutdown(self) -> None:
         """Cierra el browser. NO borra los archivos de sesión en disco."""
         if self._browser:
